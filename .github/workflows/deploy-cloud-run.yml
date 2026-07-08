@@ -75,6 +75,14 @@ jobs:
           # --port=8080 above; declaring it in env_vars fails the deploy ("reserved env names").
           env_vars: |
             IDLE_TIMEOUT_SECONDS=300
+            API_TENANT=${{ vars.SUPI_API_TENANT || 'default' }}
+          # API_KEY comes from Secret Manager, not env_vars — Cloud Run env vars are visible in
+          # plaintext to anyone who can `gcloud run services describe` the service, so the actual
+          # credential is resolved at runtime instead (see README.md "Provisioning a tenant API
+          # key"). Both the runtime (compute) SA and supi-deployer need
+          # roles/secretmanager.secretAccessor on this secret.
+          secrets: |
+            API_KEY=supi-api-key:latest
 
       - name: Deployed URL
         run: echo "Deployed to ${{ steps.deploy.outputs.url }} (IAM-authenticated — see README.md for how to call it)"

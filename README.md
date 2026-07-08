@@ -179,7 +179,38 @@ Repo **secrets**:
 
 Re-run the "Deploy to Cloud Run" workflow (or push again) once these are set.
 
-### 3. Calling an IAM-authenticated service
+### 3. Provisioning a tenant API key
+
+The app itself refuses to serve `/tts` (and other protected routes) until at least one tenant
+`API_KEY` exists (`REQUIRE_AUTH=true` by default — see `app.py`). Cloud Run env vars are plaintext
+to anyone who can `gcloud run services describe` the service, so the key lives in **Secret
+Manager** instead, referenced by name via `--set-secrets` (`deploy-cloud-run.yml`'s `secrets:`
+input) rather than baked into the deploy spec:
+
+```bash
+PROJECT_ID=<your-gcp-project-id>
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+
+# generate a strong key and store it — this is the literal value you'll send as X-API-Key
+openssl rand -hex 32 | gcloud secrets create supi-api-key --data-file=- --replication-policy=automatic
+
+# both the deployer SA (attaches the secret at deploy time) and the runtime compute SA
+# (resolves it when the container starts) need read access
+gcloud secrets add-iam-policy-binding supi-api-key \
+  --member="serviceAccount:supi-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding supi-api-key \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+Re-run "Deploy to Cloud Run" afterward — the next revision picks up `API_KEY` from the secret. To
+see the key value again later (you won't be prompted for it again): `gcloud secrets versions
+access latest --secret=supi-api-key`. For multiple tenants instead of one shared key, switch
+`store.py`'s `API_KEYS` (JSON, still via a secret) instead of the legacy single `API_KEY` — same
+`--set-secrets` mechanism, different env var name.
+
+### 4. Calling an IAM-authenticated service
 
 Per your choice, the deployed service requires a Google identity token — it is **not** open to the
 public internet, on top of the app's own `X-API-Key` check. Grant a caller access:
@@ -207,7 +238,7 @@ If your caller can't easily mint Google identity tokens (e.g. a third-party tele
 alternative is redeploying with `--allow-unauthenticated` — the app's own `X-API-Key` auth still
 gates actual generation either way. That's a deliberate tradeoff to revisit if it becomes a blocker.
 
-### 4. Deploying the admin console (optional, not automated)
+### 5. Deploying the admin console (optional, not automated)
 
 The same image also serves `console_app:console_app`. To deploy it as a second Cloud Run service:
 
