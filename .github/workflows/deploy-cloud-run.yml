@@ -72,9 +72,10 @@ jobs:
             --cpu-boost
             --port=8080
             --no-allow-unauthenticated
+          # PORT is deliberately not set here — Cloud Run reserves it and auto-injects it to match
+          # --port=8080 above; declaring it in env_vars fails the deploy ("reserved env names").
           env_vars: |
             IDLE_TIMEOUT_SECONDS=300
-            PORT=8080
 
       - name: Deployed URL
         run: echo "Deployed to ${{ steps.deploy.outputs.url }} (IAM-authenticated — see README.md for how to call it)"
