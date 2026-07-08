@@ -15,8 +15,9 @@ What changed vs. the GPU/RunPod original:
   (default 300 = 5 minutes) with no HTTP request, so the container exits deterministically rather
   than relying on Cloud Run's own (undocumented) idle-instance garbage collection. Combined with
   `--min-instances=0`, the service is only ever up while it's being used.
-- **GHCR image build** — GitHub Actions builds the Docker image and pushes it to
-  `ghcr.io/<owner>/supi-cloud-run` on every push to `main`.
+- **Artifact Registry image build** — GitHub Actions authenticates to GCP via Workload Identity
+  Federation and pushes the Docker image directly to your project's Artifact Registry on every push
+  to `main` — no GHCR, no proxy hop, Cloud Run pulls the same repo it was pushed to.
 
 ## Cost model
 
@@ -94,22 +95,14 @@ git push -u origin main
 ```
 
 Pushing to `main` triggers `.github/workflows/build-and-push.yml`, which builds the image and
-pushes `ghcr.io/<owner>/supi-cloud-run:latest` + `:<commit-sha>`.
+pushes it directly to your Artifact Registry repo (see step 2) as `:latest` + `:sha-<commit-sha>`.
 
-### 2. GHCR package visibility
+### 2. Cloud Run deploy setup (GCP side — do this once)
 
-By default a package's visibility follows the repo's (private repo -> private package). Cloud Run
-can pull a **public** GHCR image with zero extra config; pulling a **private** one needs either an
-Artifact Registry remote-repository proxy or an image-pull secret — more setup. This repo's image
-has no secrets baked in (all credentials are runtime env vars, not build-time), only code and model
-weights, so making the package public is a reasonable choice for a personal/small-team project — but
-it's your call. To do it manually: GitHub -> your profile/org -> Packages -> `supi-cloud-run` ->
-Package settings -> Change visibility.
-
-### 3. Cloud Run deploy setup (GCP side — do this once)
-
-`.github/workflows/deploy-cloud-run.yml` deploys via Workload Identity Federation (no long-lived
-JSON key). You'll need a GCP project with Cloud Run + IAM Credentials APIs enabled, then:
+Both workflows authenticate via Workload Identity Federation (no long-lived JSON key) as the same
+service account, `supi-deployer` — it both pushes the image (`build-and-push.yml`) and issues the
+`gcloud run deploy` (`deploy-cloud-run.yml`). You'll need a GCP project with the Cloud Run, IAM
+Credentials, and Artifact Registry APIs enabled, then:
 
 ```bash
 PROJECT_ID=<your-gcp-project-id>
@@ -117,9 +110,10 @@ REGION=<e.g. us-central1>
 POOL=github-pool
 PROVIDER=github-provider
 SA=supi-deployer
+AR_REPO=supi-cloud-run
 
 gcloud config set project "$PROJECT_ID"
-gcloud services enable run.googleapis.com iamcredentials.googleapis.com
+gcloud services enable run.googleapis.com iamcredentials.googleapis.com artifactregistry.googleapis.com
 
 # Workload Identity Pool + Provider trusting this specific GitHub repo
 gcloud iam workload-identity-pools create "$POOL" --location=global
@@ -129,7 +123,7 @@ gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
   --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
   --attribute-condition="assertion.repository=='<your-account-or-org>/supi-cloud-run'"
 
-# Deploy service account, scoped to Cloud Run admin only
+# Deploy service account: Cloud Run admin + Artifact Registry writer (pushes AND deploys)
 gcloud iam service-accounts create "$SA" --display-name="Supi Cloud Run deployer"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
@@ -144,25 +138,30 @@ gcloud iam service-accounts add-iam-policy-binding \
   --role="roles/iam.workloadIdentityUser" \
   --member="principalSet://iam.googleapis.com/projects/$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')/locations/global/workloadIdentityPools/${POOL}/attribute.repository/<your-account-or-org>/supi-cloud-run"
 
+# Artifact Registry repo the image lives in (standard docker repo, not a remote-repository proxy —
+# GitHub Actions pushes straight into it, Cloud Run pulls straight out of it)
+gcloud artifacts repositories create "$AR_REPO" \
+  --repository-format=docker \
+  --location="$REGION" \
+  --description="Supi Cloud Run TTS images"
+
+gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" \
+  --location="$REGION" \
+  --member="serviceAccount:${SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+
+# The Cloud Run service's *runtime* identity is a different principal than the deployer above —
+# unless you set --service-account in deploy-cloud-run.yml, Cloud Run pulls the image at instance
+# startup as the project's default compute service account, so it also needs read access:
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" \
+  --location="$REGION" \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/artifactregistry.reader"
+
 # Print the provider resource name for the GitHub secret below
 gcloud iam workload-identity-pools providers describe "$PROVIDER" \
   --location=global --workload-identity-pool="$POOL" --format="value(name)"
-```
-
-**Cloud Run cannot pull an image from `ghcr.io` directly** — it only accepts Artifact Registry,
-`gcr.io`, or Docker Hub sources. The fix is an Artifact Registry **remote repository**, which acts
-as a caching proxy in front of GHCR; `deploy-cloud-run.yml` already targets the resulting path. This
-requires the GHCR package to be **public** (see step 2 above) — an unauthenticated remote repository
-can't reach a private upstream without extra Secret Manager / PAT setup not covered here. One more
-one-time command:
-
-```bash
-gcloud artifacts repositories create ghcr \
-  --repository-format=docker \
-  --location="$REGION" \
-  --mode=remote-repository \
-  --remote-repo-config-desc="Proxy for ghcr.io" \
-  --remote-docker-repo=https://ghcr.io
 ```
 
 Then in the GitHub repo, **Settings -> Secrets and variables -> Actions**:
@@ -170,7 +169,7 @@ Then in the GitHub repo, **Settings -> Secrets and variables -> Actions**:
 Repo **variables** (not secret — plain config):
 - `GCP_PROJECT_ID` = `<your-gcp-project-id>`
 - `GCP_REGION` = e.g. `us-central1`
-- `GCP_AR_GHCR_REPO` = `ghcr` (optional, matches the `gcloud artifacts repositories create` name above — this is the default)
+- `GCP_AR_REPO` = `supi-cloud-run` (optional, matches the `gcloud artifacts repositories create` name above — this is the default)
 - `CLOUD_RUN_SERVICE_NAME` = `supi-tts` (optional, this is the default)
 - `CLOUD_RUN_CPU` / `CLOUD_RUN_MEMORY` / `CLOUD_RUN_MAX_INSTANCES` (optional, tune to taste)
 
@@ -180,7 +179,7 @@ Repo **secrets**:
 
 Re-run the "Deploy to Cloud Run" workflow (or push again) once these are set.
 
-### 4. Calling an IAM-authenticated service
+### 3. Calling an IAM-authenticated service
 
 Per your choice, the deployed service requires a Google identity token — it is **not** open to the
 public internet, on top of the app's own `X-API-Key` check. Grant a caller access:
@@ -208,13 +207,13 @@ If your caller can't easily mint Google identity tokens (e.g. a third-party tele
 alternative is redeploying with `--allow-unauthenticated` — the app's own `X-API-Key` auth still
 gates actual generation either way. That's a deliberate tradeoff to revisit if it becomes a blocker.
 
-### 5. Deploying the admin console (optional, not automated)
+### 4. Deploying the admin console (optional, not automated)
 
 The same image also serves `console_app:console_app`. To deploy it as a second Cloud Run service:
 
 ```bash
 gcloud run deploy supi-console \
-  --image=ghcr.io/<owner>/supi-cloud-run:<tag> \
+  --image=<region>-docker.pkg.dev/<project-id>/supi-cloud-run/supi-cloud-run:<tag> \
   --region=<region> \
   --set-env-vars="APP_MODULE=console_app:console_app,ADMIN_API_KEY=<pick-a-strong-key>" \
   --min-instances=0 --max-instances=1 --concurrency=1 \

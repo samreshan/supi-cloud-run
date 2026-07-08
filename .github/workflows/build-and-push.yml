@@ -1,4 +1,4 @@
-name: Build and push image to GHCR
+name: Build and push image to Artifact Registry
 
 on:
   push:
@@ -6,37 +6,54 @@ on:
   workflow_dispatch: {}
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO || 'supi-cloud-run' }}/${{ github.event.repository.name }}
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-    outputs:
-      # "sha-" prefix matches docker/metadata-action's type=sha tag rule below.
-      image_tag_sha: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+      id-token: write # required for keyless Workload Identity Federation auth to GCP
     steps:
+      - name: Check required config is present
+        run: |
+          missing=()
+          [ -z "${{ vars.GCP_PROJECT_ID }}" ] && missing+=("repo variable GCP_PROJECT_ID")
+          [ -z "${{ vars.GCP_REGION }}" ] && missing+=("repo variable GCP_REGION")
+          [ -z "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ] && missing+=("repo secret GCP_WORKLOAD_IDENTITY_PROVIDER")
+          [ -z "${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}" ] && missing+=("repo secret GCP_DEPLOY_SERVICE_ACCOUNT")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required GitHub Actions config: ${missing[*]}. See README.md 'Cloud Run deploy setup'."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ vars.GCP_REGION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
 
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
@@ -56,11 +73,4 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Image published
-        run: echo "Pushed ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} (and :latest on main)."
-
-# NOTE: this workflow does NOT change the GHCR package's visibility. By default a newly published
-# GHCR package inherits the repo's visibility (private repo -> private package). For Cloud Run to
-# pull a PRIVATE image it needs registry credentials wired up (Artifact Registry remote-repository
-# proxy, or an image-pull secret) — more setup than pulling a public one. See README.md "GHCR
-# package visibility" for the tradeoff and the one manual step to make the package public if you
-# want the simpler path. This is left as your explicit choice, not automated here.
+        run: echo "Pushed ${{ env.IMAGE }}:sha-${{ github.sha }} (and :latest on main)."

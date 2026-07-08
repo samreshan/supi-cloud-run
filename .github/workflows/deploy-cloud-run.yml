@@ -2,7 +2,7 @@ name: Deploy to Cloud Run
 
 on:
   workflow_run:
-    workflows: ["Build and push image to GHCR"]
+    workflows: ["Build and push image to Artifact Registry"]
     types: [completed]
     branches: [main]
   workflow_dispatch: {}
@@ -15,15 +15,11 @@ jobs:
       contents: read
       id-token: write # required for keyless Workload Identity Federation auth to GCP
     env:
-      # Cloud Run cannot pull from ghcr.io directly (only Artifact Registry / gcr.io / Docker Hub).
-      # GCP_AR_GHCR_REPO names an Artifact Registry "remote repository" that proxies ghcr.io — a
-      # one-time `gcloud artifacts repositories create ... --mode=remote-repository
-      # --remote-docker-repo=https://ghcr.io` (see README.md "Cloud Run deploy setup"). Once that
-      # proxy exists, this path pulls the same image GHCR just built, through the proxy.
-      # Tag has a "sha-" prefix because build-and-push.yml's docker/metadata-action uses the
-      # `type=sha` tag rule, which prefixes long-format SHA tags with "sha-" by default — the
-      # actual pushed tag is e.g. sha-8aabb94..., not the bare commit SHA.
-      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_GHCR_REPO || 'ghcr' }}/${{ github.repository }}:sha-${{ github.event.workflow_run.head_sha || github.sha }}
+      # build-and-push.yml pushes directly to this Artifact Registry repo via WIF (no GHCR, no
+      # proxy). Tag has a "sha-" prefix because docker/metadata-action's `type=sha` tag rule
+      # prefixes long-format SHA tags with "sha-" by default — the actual pushed tag is e.g.
+      # sha-8aabb94..., not the bare commit SHA.
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO || 'supi-cloud-run' }}/${{ github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha || github.sha }}
       SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE_NAME || 'supi-tts' }}
       REGION: ${{ vars.GCP_REGION }}
     steps:
