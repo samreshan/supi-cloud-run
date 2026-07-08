@@ -210,33 +210,24 @@ access latest --secret=supi-api-key`. For multiple tenants instead of one shared
 `store.py`'s `API_KEYS` (JSON, still via a secret) instead of the legacy single `API_KEY` — same
 `--set-secrets` mechanism, different env var name.
 
-### 4. Calling an IAM-authenticated service
+### 4. Calling the service
 
-Per your choice, the deployed service requires a Google identity token — it is **not** open to the
-public internet, on top of the app's own `X-API-Key` check. Grant a caller access:
-
-```bash
-gcloud run services add-iam-policy-binding supi-tts \
-  --region=<region> \
-  --member="serviceAccount:<caller-sa>@<project>.iam.gserviceaccount.com" \
-  --role="roles/run.invoker"
-```
-
-A caller then fetches an identity token scoped to the service URL and sends it as a Bearer token
-alongside the existing `X-API-Key` header:
+The Cloud Run layer is `--allow-unauthenticated` — no Google identity token needed, no `gcloud`
+required on the caller's side. The app's own `X-API-Key` check (`tenancy.py`) is the actual gate:
+constant-time key comparison, per-tenant rate limiting, and credit metering (`credits.py`). Any
+system that can send an HTTPS request with a header can call it:
 
 ```bash
-TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
 curl -X POST "$SERVICE_URL/tts" \
-  -H "Authorization: Bearer $TOKEN" \
   -H "X-API-Key: <tenant-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"text": "..."}'
 ```
 
-If your caller can't easily mint Google identity tokens (e.g. a third-party telephony webhook), the
-alternative is redeploying with `--allow-unauthenticated` — the app's own `X-API-Key` auth still
-gates actual generation either way. That's a deliberate tradeoff to revisit if it becomes a blocker.
+Because the endpoint is reachable by anyone who has (or guesses) the URL, the API key is the whole
+perimeter — treat it like any other production credential (Secret Manager, not committed to the
+repo; see step 3 above for how it's provisioned). If you outgrow a shared key, switch `API_KEYS`
+(JSON, multi-tenant) for `API_KEY` (single tenant) in `deploy-cloud-run.yml`'s `secrets:` input.
 
 ### 5. Deploying the admin console (optional, not automated)
 
