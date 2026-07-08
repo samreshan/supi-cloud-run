@@ -1,0 +1,75 @@
+name: Deploy to Cloud Run
+
+on:
+  workflow_run:
+    workflows: ["Build and push image to GHCR"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for keyless Workload Identity Federation auth to GCP
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha || github.sha }}
+      SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE_NAME || 'supi-tts' }}
+      REGION: ${{ vars.GCP_REGION }}
+    steps:
+      - name: Check required config is present
+        run: |
+          missing=()
+          [ -z "${{ vars.GCP_PROJECT_ID }}" ] && missing+=("repo variable GCP_PROJECT_ID")
+          [ -z "${{ vars.GCP_REGION }}" ] && missing+=("repo variable GCP_REGION")
+          [ -z "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ] && missing+=("repo secret GCP_WORKLOAD_IDENTITY_PROVIDER")
+          [ -z "${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}" ] && missing+=("repo secret GCP_DEPLOY_SERVICE_ACCOUNT")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required GitHub Actions config: ${missing[*]}. See README.md 'Cloud Run deploy setup'."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      # Scale-to-zero economics (see README.md "Cost model"):
+      #   --min-instances=0        only up when used; scales to zero when idle
+      #   --max-instances          caps a burst from silently exceeding the free tier / budget
+      #   --concurrency=1          CPU-bound synthesis; one request per instance at a time
+      #   --cpu-boost              faster cold start (Cloud Run gives extra CPU during startup)
+      #   (no --no-cpu-throttling) keeps default request-based billing — no charge while idle
+      # No --allow-unauthenticated: this service is IAM-gated (caller needs a Google identity
+      # token from an authorized principal) on top of the app's own X-API-Key check in
+      # tenancy.py — see README.md "Calling an IAM-authenticated service" for how callers invoke it.
+      # The app's own IDLE_TIMEOUT_SECONDS=300 watchdog (app.py) additionally makes the container
+      # exit deterministically 5 minutes after its last request, rather than relying solely on
+      # Cloud Run's internal (undocumented) idle-instance garbage collection.
+      - name: Deploy public TTS API
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE }}
+          flags: >-
+            --min-instances=0
+            --max-instances=${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
+            --concurrency=1
+            --cpu=${{ vars.CLOUD_RUN_CPU || '4' }}
+            --memory=${{ vars.CLOUD_RUN_MEMORY || '8Gi' }}
+            --timeout=300
+            --cpu-boost
+            --port=8080
+            --no-allow-unauthenticated
+          env_vars: |
+            IDLE_TIMEOUT_SECONDS=300
+            PORT=8080
+
+      - name: Deployed URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.url }} (IAM-authenticated — see README.md for how to call it)"

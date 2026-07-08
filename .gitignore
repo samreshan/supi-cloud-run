@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Generated audio outputs from testing
+*.wav
+*.mp3
+
+# Editor / IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Hugging Face caches (if run locally)
+.cache/
+
+# Persistent tenant store (SqliteStore via TENANT_DB_PATH)
+*.db
+*.db-wal
+*.db-shm
+
+# Cached voice-profile tensors (L2 disk cache + registry)
+*.pt
+voice_profiles/

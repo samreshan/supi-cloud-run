@@ -1,0 +1,20 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.10.3
+slowapi==0.1.9
+omnivoice==0.1.5
+soundfile==0.13.1
+requests==2.32.4
+librosa==0.11.0
+# transformers: pulled from the moving 'main' branch, matching the upstream omniServerless repo's
+# known-working path. For reproducible/secure builds, pin to a known-good commit instead:
+# git+https://github.com/huggingface/transformers.git@<sha>
+git+https://github.com/huggingface/transformers.git
+accelerate>=0.30.0
+funasr
+pydub
+soxr
+numpy
+# NOTE: torch / torchaudio are intentionally NOT listed here — the Dockerfile installs the
+# CPU-only wheels from the PyTorch CPU index, which are a fraction of the size of the default
+# CUDA-bundled wheels and are all this image ever runs.

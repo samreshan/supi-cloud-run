@@ -1,0 +1,35 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # tts_core.py imports torch/torchaudio at module level even though tests mock the *model*
+      # (omnivoice) via sys.modules — so real CPU-only torch/torchaudio wheels are needed here,
+      # not mocks. These are small (no bundled CUDA libs), unlike the default PyPI wheels.
+      - name: Install CPU torch/torchaudio
+        run: pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install remaining dependencies
+        run: |
+          pip install --upgrade pip
+          pip install fastapi==0.115.6 pydantic==2.10.3 slowapi==0.1.9 numpy soundfile==0.13.1 \
+            librosa==0.11.0 soxr requests==2.32.4 pydub httpx pytest
+
+      - name: Run tests
+        run: pytest tests/ test_metering.py test_sweep.py test_voices.py -v
