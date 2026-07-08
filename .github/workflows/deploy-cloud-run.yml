@@ -20,7 +20,10 @@ jobs:
       # one-time `gcloud artifacts repositories create ... --mode=remote-repository
       # --remote-docker-repo=https://ghcr.io` (see README.md "Cloud Run deploy setup"). Once that
       # proxy exists, this path pulls the same image GHCR just built, through the proxy.
-      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_GHCR_REPO || 'ghcr' }}/${{ github.repository }}:${{ github.event.workflow_run.head_sha || github.sha }}
+      # Tag has a "sha-" prefix because build-and-push.yml's docker/metadata-action uses the
+      # `type=sha` tag rule, which prefixes long-format SHA tags with "sha-" by default — the
+      # actual pushed tag is e.g. sha-8aabb94..., not the bare commit SHA.
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_GHCR_REPO || 'ghcr' }}/${{ github.repository }}:sha-${{ github.event.workflow_run.head_sha || github.sha }}
       SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE_NAME || 'supi-tts' }}
       REGION: ${{ vars.GCP_REGION }}
     steps:

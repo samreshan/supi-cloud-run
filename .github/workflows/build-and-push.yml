@@ -16,7 +16,8 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image_tag_sha: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      # "sha-" prefix matches docker/metadata-action's type=sha tag rule below.
+      image_tag_sha: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,7 +56,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Image published
-        run: echo "Pushed ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} (and :latest on main)."
+        run: echo "Pushed ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} (and :latest on main)."
 
 # NOTE: this workflow does NOT change the GHCR package's visibility. By default a newly published
 # GHCR package inherits the repo's visibility (private repo -> private package). For Cloud Run to
