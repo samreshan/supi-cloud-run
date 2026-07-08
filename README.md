@@ -149,11 +149,28 @@ gcloud iam workload-identity-pools providers describe "$PROVIDER" \
   --location=global --workload-identity-pool="$POOL" --format="value(name)"
 ```
 
+**Cloud Run cannot pull an image from `ghcr.io` directly** — it only accepts Artifact Registry,
+`gcr.io`, or Docker Hub sources. The fix is an Artifact Registry **remote repository**, which acts
+as a caching proxy in front of GHCR; `deploy-cloud-run.yml` already targets the resulting path. This
+requires the GHCR package to be **public** (see step 2 above) — an unauthenticated remote repository
+can't reach a private upstream without extra Secret Manager / PAT setup not covered here. One more
+one-time command:
+
+```bash
+gcloud artifacts repositories create ghcr \
+  --repository-format=docker \
+  --location="$REGION" \
+  --mode=remote-repository \
+  --remote-repo-config-desc="Proxy for ghcr.io" \
+  --remote-docker-repo=https://ghcr.io
+```
+
 Then in the GitHub repo, **Settings -> Secrets and variables -> Actions**:
 
 Repo **variables** (not secret — plain config):
 - `GCP_PROJECT_ID` = `<your-gcp-project-id>`
 - `GCP_REGION` = e.g. `us-central1`
+- `GCP_AR_GHCR_REPO` = `ghcr` (optional, matches the `gcloud artifacts repositories create` name above — this is the default)
 - `CLOUD_RUN_SERVICE_NAME` = `supi-tts` (optional, this is the default)
 - `CLOUD_RUN_CPU` / `CLOUD_RUN_MEMORY` / `CLOUD_RUN_MAX_INSTANCES` (optional, tune to taste)
 

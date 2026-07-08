@@ -15,7 +15,12 @@ jobs:
       contents: read
       id-token: write # required for keyless Workload Identity Federation auth to GCP
     env:
-      IMAGE: ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha || github.sha }}
+      # Cloud Run cannot pull from ghcr.io directly (only Artifact Registry / gcr.io / Docker Hub).
+      # GCP_AR_GHCR_REPO names an Artifact Registry "remote repository" that proxies ghcr.io — a
+      # one-time `gcloud artifacts repositories create ... --mode=remote-repository
+      # --remote-docker-repo=https://ghcr.io` (see README.md "Cloud Run deploy setup"). Once that
+      # proxy exists, this path pulls the same image GHCR just built, through the proxy.
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_GHCR_REPO || 'ghcr' }}/${{ github.repository }}:${{ github.event.workflow_run.head_sha || github.sha }}
       SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE_NAME || 'supi-tts' }}
       REGION: ${{ vars.GCP_REGION }}
     steps:
