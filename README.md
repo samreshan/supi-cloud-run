@@ -4,6 +4,10 @@ CPU-only, scale-to-zero Cloud Run fork of the [omniServerless](../omniServerless
 service. That repo was **not modified** — this is an independent copy, adapted for a business-hours
 traffic pattern (roughly 10am–6pm) where paying for an always-on GPU pod doesn't make sense.
 
+Existing caller migrating from the RunPod GPU service? See **[MIGRATION.md](MIGRATION.md)** for
+what changed in the API contract (short answer: almost nothing) and what's operationally
+different (cold starts, voice-profile persistence).
+
 What changed vs. the GPU/RunPod original:
 - **CPU inference** — no CUDA, no `torch.compile` (it would slow every cold start down), CPU thread
   tuning, optional int8 dynamic quantization, optional lazy ASR loading.
